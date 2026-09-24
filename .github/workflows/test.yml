@@ -1,0 +1,33 @@
+# Builds and tests every formula on macOS, the way a person installs it: from source, through the
+# tap, then brew test. A formula that no longer builds against its source is a broken install for
+# everybody who types the command in the README.
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  formulae:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tap
+        run: brew tap agentiik/tap "$GITHUB_WORKSPACE"
+
+      - name: style
+        run: brew style agentiik/tap
+
+      - name: agk
+        run: |
+          brew install --build-from-source agentiik/tap/agk
+          brew test agentiik/tap/agk
+
+      - name: agentiik
+        run: |
+          brew install --HEAD agentiik/tap/agentiik
+          brew test agentiik/tap/agentiik

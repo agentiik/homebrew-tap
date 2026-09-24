@@ -7,7 +7,7 @@
 # The server programs are not in a tagged release yet, so until v0.2.0 is tagged this formula
 # builds from main only (`brew install --HEAD`), and a stable url is added with the tag.
 class Agentiik < Formula
-  desc "Agentiik server programs: API, controller and runner, with the agk command line"
+  desc "Server programs: API, controller and runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"

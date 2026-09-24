@@ -41,8 +41,10 @@ class Agk < Formula
       steps:
         greet:
           image: alpine:3.21
-          script: echo hello
+          outputs: [out]
+          script:
+            - echo hello
     YAML
-    assert_match "greet", shell_output("#{bin}/agk graph --format mermaid")
+    assert_match "step_greet", shell_output("#{bin}/agk graph --format mermaid")
   end
 end
