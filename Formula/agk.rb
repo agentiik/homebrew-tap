@@ -1,14 +1,17 @@
 # The agk command line alone: validate, graph, run a workflow locally, test a brick.
 #
 # Built from the tagged source rather than downloaded as a binary, so that what a person runs is
-# what the tag names and nothing a release job could have swapped. The static helper a script step
+# what the tag names and nothing a release job could have swapped. It is cloned at the tag rather
+# than fetched as an archive because go build stamps the version from the tag, and agk --version
+# then names the release instead of (devel). The static helper a script step
 # mounts at /agk/bin/agk is built first, for both architectures a container runs on, and embedded,
 # so `agk run --local` gives script steps their helper with no extra download.
 class Agk < Formula
   desc "Command-line tool for Agentiik workflows: validate, graph and run them locally"
   homepage "https://agentiik.github.io/docs"
-  url "https://github.com/agentiik/agentiik/archive/refs/tags/v0.1.2.tar.gz"
-  sha256 "536d9f959bd3856967e72e05c650d5e984383fbd2bb2e7b89a7f164d455aec3f"
+  url "https://github.com/agentiik/agentiik.git",
+      tag:      "v0.1.2",
+      revision: "0c751e1469b6d679228fa038ce34f8d4c5b6ff20"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
@@ -32,7 +35,7 @@ class Agk < Formula
   end
 
   test do
-    assert_match "agk", shell_output("#{bin}/agk --version")
+    assert_match version.to_s, shell_output("#{bin}/agk --version")
     (testpath/"agentiik.yaml").write <<~YAML
       apiVersion: agentiik.dev/v1
       kind: Workflow

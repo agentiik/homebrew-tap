@@ -16,11 +16,13 @@ Both build from source with Go, so what runs is what the tag names. `agentiik` d
 
 ## Releasing
 
-Every repository of the organisation carries the same version and is tagged at the same moment. A formula names the source archive of `agentiik/agentiik` by its SHA-256, so it can only be bumped once that tag exists:
+Every repository of the organisation carries the same version and is tagged at the same moment. A formula clones `agentiik/agentiik` at a tag and pins the commit it points at, so it can only be bumped once that tag exists:
 
 1. Tag every repository, this one included.
-2. Point `url` at the new tag's archive in each formula, set `sha256` to `curl -sL <url> | shasum -a 256`, and open a pull request.
+2. In each formula, set `tag` to the new tag and `revision` to `git ls-remote https://github.com/agentiik/agentiik.git refs/tags/<tag>`, and open a pull request.
 3. From `v0.2.0` on, `agentiik` gets a stable `url` and loses its `--HEAD` only status.
+
+It clones rather than fetching an archive because `go build` stamps the version from the tag, so `agk --version` names the release.
 
 CI builds and tests both formulae on macOS for every pull request.
 
