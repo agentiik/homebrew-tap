@@ -1,0 +1,96 @@
+#!/bin/bash
+# agentiik-server: a server on this Mac alone, as the one service `brew services start agentiik/tap/agentiik` runs.
+#
+# It starts three programs, each with its own settings and its own log in @HOMEBREW_PREFIX@/var/log/agentiik:
+# nats-server on etc/agentiik/nats-server.conf, then agentiik-api serve on api.env, then agentiik-controller on
+# controller.env. One service rather than three, because Homebrew gives a formula one service, and the three are one
+# installation: the API refuses to start without its bus, and a controller without the API has nobody to serve.
+#
+# If any of them ends, it stops the other two and exits 1, and launchd starts all three again. At SIGTERM, which
+# `brew services stop` sends, it stops them in the reverse order, waits for each, and exits 0.
+set -u
+
+prefix="@HOMEBREW_PREFIX@"
+etc="$prefix/etc/agentiik"
+state="$prefix/var/lib/agentiik"
+logs="$prefix/var/log/agentiik"
+
+say() { printf '%s agentiik-server: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
+
+# Not set up is not a crash: exit 0, so launchd does not start it again every ten seconds.
+if [ ! -f "$etc/secrets/operator-token.sha256" ] || [ ! -f "$state/bus/accounts.conf" ]; then
+  say "this server is not set up: run agentiik-setup, then brew services restart agentiik/tap/agentiik"
+  exit 0
+fi
+mkdir -p "$logs"
+
+pids=""
+names=""
+
+# start NAME SETTINGS PROGRAM [ARG...] runs one program in the background, with the variables SETTINGS holds
+# exported to it alone, and its output appended to its log.
+start() {
+  local name="$1" settings="$2"
+  shift 2
+  (
+    if [ -n "$settings" ]; then
+      set -a
+      # shellcheck disable=SC1090
+      . "$settings"
+      set +a
+    fi
+    exec "$@"
+  ) >>"$logs/$name.log" 2>&1 &
+  pids="$! $pids"
+  names="$name $names"
+  say "started $name, pid $!, logging to $logs/$name.log"
+}
+
+# stop sends SIGTERM to every program, the last started first, and waits for each.
+stop() {
+  trap - TERM INT
+  local pid
+  for pid in $pids; do
+    kill -TERM "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+  done
+}
+
+trap 'say "asked to stop"; stop; exit 0' TERM INT
+
+start nats-server "" "$prefix/bin/nats-server" -c "$etc/nats-server.conf"
+
+# The API connects to the bus as it starts, and refuses to start without it. nats-server logs this probe, which
+# closes before any TLS, as a handshake error once per start.
+bus="$(. "$etc/api.env" && printf '%s' "${AGK_BUS_URL#*://}")"
+host="${bus%:*}"
+port="${bus##*:}"
+waited=0
+until nc -z "$host" "$port" 2>/dev/null; do
+  if [ "$waited" -ge 30 ] || ! kill -0 "${pids%% *}" 2>/dev/null; then
+    say "the bus did not listen on $bus: $logs/nats-server.log says why"
+    stop
+    exit 1
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+
+start agentiik-api "$etc/api.env" "$prefix/bin/agentiik-api" serve
+start agentiik-controller "$etc/controller.env" "$prefix/bin/agentiik-controller"
+
+# bash 3.2, which macOS ships, has no wait -n, so every program is looked at every two seconds. The sleep is waited
+# on rather than run in the foreground, so that SIGTERM is answered at once.
+while :; do
+  set -- $names
+  for pid in $pids; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      say "$1 ended: $logs/$1.log says why. Stopping the others, for launchd to start all three again"
+      stop
+      exit 1
+    fi
+    shift
+  done
+  sleep 2 &
+  wait $!
+done

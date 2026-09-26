@@ -1,0 +1,278 @@
+#!/bin/bash
+# agentiik-setup: prepare a server on this Mac alone, once, for `brew services start agentiik/tap/agentiik`.
+#
+# Every step is skipped where it was done already, so running it again repairs what is missing and changes
+# nothing else. `agentiik-setup remove --yes` undoes all of it.
+set -euo pipefail
+
+prefix="@HOMEBREW_PREFIX@"
+etc="$prefix/etc/agentiik"
+secrets="$etc/secrets"
+tls="$etc/tls"
+state="$prefix/var/lib/agentiik"
+logs="$prefix/var/log/agentiik"
+keychain="/Library/Keychains/System.keychain"
+
+# The database the settings files name, reached over PostgreSQL's socket in /tmp, where Homebrew's PostgreSQL
+# puts it. The role that migrates is the one Homebrew's PostgreSQL made for whoever installed it.
+socket="/tmp"
+database="agentiik"
+role="agentiik"
+admin_url="${AGK_MIGRATE_DATABASE_URL:-postgres://$(id -un)@/$database?host=$socket}"
+
+usage() {
+  cat <<EOF
+usage:
+  agentiik-setup [--namespace NAME]   prepare this Mac's server: secrets, TLS, database, bus, operator token
+  agentiik-setup remove --yes         undo it: the keychain entry, the database and role, every secret and state
+
+--namespace is the namespace workflows are pushed to, $(default_namespace) by default, which this creates with
+agentiik-api namespace create until v0.3.0 has a route for it. The settings are in $etc, and https://agentiik.github.io/docs/#configuration
+says what each is.
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+step() { printf '\n== %s\n' "$*"; }
+die() { printf 'agentiik-setup: %s\n' "$*" >&2; exit 1; }
+
+# default_namespace is this user's name, as a namespace is spelled: lowercase letters and digits, joined by dashes.
+default_namespace() {
+  id -un | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+}
+
+# pg finds a PostgreSQL client program: on the PATH, or in the newest Homebrew postgresql@N, which is keg-only.
+pg() {
+  local program="$1" candidate
+  if command -v "$program" >/dev/null 2>&1; then
+    command -v "$program"
+    return
+  fi
+  for candidate in $(ls -d "$prefix"/opt/postgresql@* 2>/dev/null | sort -t@ -k2 -n -r); do
+    if [ -x "$candidate/bin/$program" ]; then
+      printf '%s\n' "$candidate/bin/$program"
+      return
+    fi
+  done
+  return 1
+}
+
+# secret NAME writes what standard input holds to a file its owner alone can read, unless that file exists.
+secret() {
+  local path="$secrets/$1"
+  if [ -s "$path" ]; then
+    say "kept      $path"
+    cat >/dev/null
+    return
+  fi
+  (umask 077 && cat >"$path")
+  say "wrote     $path"
+}
+
+# settings FILE runs the rest of the line with the variables FILE holds, and those alone of the AGK_* kind.
+settings() {
+  local file="$1"
+  shift
+  (
+    set -a
+    # shellcheck disable=SC1090
+    . "$file"
+    set +a
+    "$@"
+  )
+}
+
+prepare() {
+  local namespace="$1"
+  [ "$(uname -s)" = Darwin ] || die "this prepares a server on macOS, trusted through its keychain: on Linux, https://agentiik.github.io/docs/#configuration"
+  [ "$(id -u)" -ne 0 ] || die "run it as the user brew services runs the server as, not as root: it asks for sudo once, to trust the certificate"
+  printf '%s' "$namespace" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' || die "$namespace is not a namespace: lowercase letters and digits, joined by dashes"
+  [ -f "$etc/api.env" ] && [ -f "$etc/controller.env" ] && [ -f "$etc/nats-server.conf" ] ||
+    die "$etc is missing a settings file: brew reinstall agentiik/tap/agentiik writes it again"
+
+  step "What this needs"
+  local psql createdb
+  psql="$(pg psql)" && createdb="$(pg createdb)" ||
+    die "no PostgreSQL client: brew install postgresql@17, then brew services start postgresql@17"
+  [ -x "$prefix/bin/nats-server" ] || die "no nats-server: brew install nats-server"
+  local answered=""
+  for _ in $(seq 1 30); do
+    if "$psql" -h "$socket" -d postgres -Atqc 'select 1' >/dev/null 2>&1; then
+      answered=1
+      break
+    fi
+    sleep 1
+  done
+  [ -n "$answered" ] || die "PostgreSQL does not answer on its socket in $socket: brew services start postgresql@17, and run this again"
+  say "PostgreSQL answers at $socket, nats-server is $prefix/bin/nats-server"
+
+  step "Directories, readable by their owner alone"
+  mkdir -p "$secrets" "$tls" "$state/bus" "$state/objects" "$state/jetstream" "$logs"
+  chmod 700 "$secrets" "$tls" "$state" "$state/bus" "$state/objects" "$state/jetstream"
+  say "$secrets, $tls and $state"
+
+  step "Secrets"
+  openssl rand -hex 24 | secret database-password
+  openssl rand -base64 32 | secret presign-key
+  printf 'id: %s\nkey: %s\n' "local-$(date -u +%Y%m%d)" "$(openssl rand -base64 32)" | secret master-key
+
+  step "TLS for the bus and the API, trusted by this Mac"
+  if [ -s "$tls/server.pem" ] && [ -s "$tls/server.key" ] && [ -s "$tls/ca.pem" ]; then
+    say "kept      $tls/server.pem"
+  else
+    certificates
+  fi
+  if security verify-cert -c "$tls/server.pem" -p ssl -s localhost >/dev/null 2>&1; then
+    say "trusted   $tls/ca.pem is in $keychain"
+  else
+    say "Adding $tls/ca.pem to $keychain, which asks for your password: the programs, agk included, trust what"
+    say "macOS trusts, and nothing can sign with it again, since its key was deleted once server.pem was signed."
+    sudo security add-trusted-cert -d -r trustRoot -k "$keychain" "$tls/ca.pem"
+    security verify-cert -c "$tls/server.pem" -p ssl -s localhost >/dev/null ||
+      die "macOS does not trust $tls/server.pem although $tls/ca.pem was added to $keychain"
+    say "trusted   $tls/ca.pem is in $keychain"
+  fi
+
+  step "Database"
+  if [ "$("$psql" -h "$socket" -d postgres -Atqc "select 1 from pg_database where datname = '$database'")" = 1 ]; then
+    say "kept      the database $database"
+  else
+    "$createdb" -h "$socket" "$database"
+    say "created   the database $database"
+  fi
+  AGK_MIGRATE_DATABASE_URL="$admin_url" settings "$etc/api.env" "$prefix/bin/agentiik-api" migrate
+  settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
+
+  step "Bus identity"
+  if [ -s "$state/bus/accounts.conf" ]; then
+    say "kept      $state/bus"
+  else
+    "$prefix/bin/agentiik-api" bus-init "$state/bus"
+  fi
+
+  step "Operator token"
+  local token=""
+  if [ -s "$secrets/operator-token.sha256" ]; then
+    say "kept      $secrets/operator-token.sha256"
+    say "The token was printed once, when it was made. To make another, remove that file, run agentiik-setup again,"
+    say "and restart the service."
+  else
+    token="$(openssl rand -hex 32)"
+    printf '%s' "$token" | shasum -a 256 | cut -d' ' -f1 | secret operator-token.sha256
+  fi
+
+  step "Done"
+  cat <<EOF
+Start the server, and have it start again at login:
+
+  brew services start agentiik/tap/agentiik
+
+Its logs are in $logs. Point agk at it, in the shell you run agk from:
+
+  export AGENTIIK_SERVER=https://localhost:8443
+EOF
+  if [ -n "$token" ]; then
+    cat <<EOF
+  export AGENTIIK_TOKEN=$token
+
+That is the operator token, which is allowed everything, and it is shown this once: only its hash is kept.
+EOF
+  else
+    say "  export AGENTIIK_TOKEN=<the operator token printed when it was made>"
+  fi
+  cat <<EOF
+
+Check that it answers:
+
+  curl --cacert $tls/ca.pem -H "Authorization: Bearer \$AGENTIIK_TOKEN" https://localhost:8443/api/v1/runner-pools
+
+and push a workflow with agk push --namespace $namespace. A runner is a Linux host:
+https://agentiik.github.io/docs/#installing-a-runner
+EOF
+}
+
+# certificates makes a certificate authority, signs one certificate for localhost with it, and deletes its key.
+#
+# A private authority rather than a self-signed certificate, since that is what macOS trusts as a root; its key
+# deleted, so that the one thing added to the keychain can vouch for this certificate and nothing else. 800 days,
+# under the 825 macOS accepts for a server certificate. Renewing is removing $tls and running this again.
+certificates() {
+  local work
+  work="$(mktemp -d)"
+  cat >"$work/openssl.cnf" <<'EOF'
+[req]
+distinguished_name = dn
+[dn]
+[ca]
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+[server]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:localhost, IP:127.0.0.1, IP:::1
+authorityKeyIdentifier = keyid
+EOF
+  (umask 077 && openssl ecparam -name prime256v1 -genkey -noout -out "$work/ca.key")
+  openssl req -x509 -new -sha256 -key "$work/ca.key" -days 825 -config "$work/openssl.cnf" -extensions ca \
+    -subj "/CN=Agentiik local CA $(date -u +%Y-%m-%dT%H:%M:%SZ)" -out "$work/ca.pem"
+  (umask 077 && openssl ecparam -name prime256v1 -genkey -noout -out "$tls/server.key")
+  openssl req -new -sha256 -key "$tls/server.key" -subj "/CN=localhost" -config "$work/openssl.cnf" -out "$work/server.csr"
+  openssl x509 -req -sha256 -in "$work/server.csr" -CA "$work/ca.pem" -CAkey "$work/ca.key" \
+    -set_serial "0x$(openssl rand -hex 16)" -days 800 -extfile "$work/openssl.cnf" -extensions server -out "$tls/server.pem"
+  cp "$work/ca.pem" "$tls/ca.pem"
+  rm -rf "$work"
+  say "wrote     $tls/server.pem and its key, for localhost, 127.0.0.1 and ::1, valid 800 days"
+  say "wrote     $tls/ca.pem, whose key is deleted"
+}
+
+remove() {
+  step "Removing this Mac's server"
+  if [ -s "$tls/ca.pem" ]; then
+    local sha1
+    sha1="$(openssl x509 -in "$tls/ca.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')"
+    if security find-certificate -Z -a "$keychain" 2>/dev/null | grep -q "$sha1"; then
+      say "Removing $tls/ca.pem from $keychain, which asks for your password."
+      # Deleted rather than untrusted first: remove-trusted-cert waits for a confirmation no terminal can give,
+      # and the trust setting left behind names a certificate that is no longer anywhere to trust.
+      sudo security delete-certificate -Z "$sha1" "$keychain"
+    fi
+    say "removed   the certificate authority from $keychain"
+  fi
+  local psql
+  if psql="$(pg psql)" && "$psql" -h "$socket" -d postgres -Atqc 'select 1' >/dev/null 2>&1; then
+    "$psql" -h "$socket" -d postgres -v ON_ERROR_STOP=1 -qc "drop database if exists $database" -c "drop role if exists $role"
+    say "removed   the database $database and the role $role"
+  else
+    say "PostgreSQL does not answer, so the database $database and the role $role are left as they are"
+  fi
+  rm -rf "$secrets" "$tls" "$state"
+  say "removed   $secrets, $tls and $state"
+  say "The settings in $etc and the logs in $logs are left: brew uninstall agentiik/tap/agentiik, then rm -rf $etc $logs"
+}
+
+case "${1:-}" in
+  "" )
+    prepare "$(default_namespace)"
+    ;;
+  --namespace )
+    [ $# -eq 2 ] || { usage >&2; exit 2; }
+    prepare "$2"
+    ;;
+  remove )
+    if [ $# -ne 2 ] || [ "$2" != "--yes" ]; then
+      say "agentiik-setup remove deletes the database $database, every secret and the bus identity, and cannot be" >&2
+      say "undone: stop the service first, then run agentiik-setup remove --yes" >&2
+      exit 2
+    fi
+    remove
+    ;;
+  -h | --help )
+    usage
+    ;;
+  * )
+    usage >&2
+    exit 2
+    ;;
+esac
