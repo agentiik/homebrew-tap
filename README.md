@@ -38,7 +38,7 @@ rm -rf "$(brew --prefix)/etc/agentiik" "$(brew --prefix)/var/log/agentiik"
 
 | Step | Does |
 | --- | --- |
-| `agentiik-setup` | Writes the secret files, readable by their owner alone; a certificate for `localhost`, signed by an authority it adds to the System keychain (it asks for your password) and whose key it then deletes; the database, `agentiik-api migrate`, and a namespace named after you (`--namespace` to choose, since v0.2.0 has no route to create one); the bus identity with `agentiik-api bus-init`; the operator token. Run again, it keeps all of that and repairs what is missing. |
+| `agentiik-setup` | Writes the secret files, readable by their owner alone; a certificate for `localhost`, signed by an authority it adds to the System keychain (it asks for your password) and whose key it then deletes; the database, `agentiik-api migrate`, and a namespace named after you with `agentiik-api namespace create` (`--namespace` to choose); the bus identity with `agentiik-api bus-init`; the operator token. Run again, it keeps all of that and repairs what is missing. |
 | `brew services start agentiik/tap/agentiik` | Runs `agentiik-server`, which starts `nats-server`, `agentiik-api serve` and `agentiik-controller`, stops all three if one ends so that launchd starts them again, and stops them at `brew services stop`. |
 
 The settings are in `$(brew --prefix)/etc/agentiik`: `api.env` and `controller.env`, one per program since each reads its own [settings](https://agentiik.github.io/docs/#configuration), and `nats-server.conf`. Homebrew keeps them across upgrades. The logs are in `$(brew --prefix)/var/log/agentiik`.

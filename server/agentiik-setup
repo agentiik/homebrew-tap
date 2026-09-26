@@ -26,8 +26,8 @@ usage:
   agentiik-setup [--namespace NAME]   prepare this Mac's server: secrets, TLS, database, bus, operator token
   agentiik-setup remove --yes         undo it: the keychain entry, the database and role, every secret and state
 
---namespace is the namespace workflows are pushed to, $(default_namespace) by default: v0.2.0 has no route to
-create one, so this creates it. The settings are in $etc, and https://agentiik.github.io/docs/#configuration
+--namespace is the namespace workflows are pushed to, $(default_namespace) by default, which this creates with
+agentiik-api namespace create until v0.3.0 has a route for it. The settings are in $etc, and https://agentiik.github.io/docs/#configuration
 says what each is.
 EOF
 }
@@ -141,9 +141,7 @@ prepare() {
     say "created   the database $database"
   fi
   AGK_MIGRATE_DATABASE_URL="$admin_url" settings "$etc/api.env" "$prefix/bin/agentiik-api" migrate
-  "$psql" -h "$socket" -d "$database" -v ON_ERROR_STOP=1 -Atqc \
-    "insert into namespaces (name) values ('$namespace') on conflict (name) do nothing" >/dev/null
-  say "the namespace $namespace exists"
+  settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
 
   step "Bus identity"
   if [ -s "$state/bus/accounts.conf" ]; then
