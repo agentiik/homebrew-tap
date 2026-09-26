@@ -50,12 +50,9 @@ jobs:
           brew tap agentiik/tap "$GITHUB_WORKSPACE"
           if brew trust --help >/dev/null 2>&1; then brew trust agentiik/tap; fi
 
-      # --HEAD until v0.2.1 is tagged and the formulae bumped to it: agentiik-setup runs agentiik-api namespace create,
-      # which v0.2.0 lacks. Otherwise the README's command.
+      # The README's command.
       - name: install
-        run: |
-          brew install --HEAD agentiik/tap/agentiik
-          brew install postgresql@17
+        run: brew install agentiik/tap/agentiik postgresql@17
 
       - name: set up
         run: |

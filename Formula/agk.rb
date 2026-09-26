@@ -10,8 +10,8 @@ class Agk < Formula
   desc "Command-line tool for Agentiik workflows: validate, graph and run them locally"
   homepage "https://agentiik.github.io/docs"
   url "https://github.com/agentiik/agentiik.git",
-      tag:      "v0.2.0",
-      revision: "6ede6bc7674730750d3d0a1fc9dd4228a3d78976"
+      tag:      "v0.2.1",
+      revision: "95f6f889439e22900df8d9d42252247a5439e360"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
