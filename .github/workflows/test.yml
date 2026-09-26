@@ -120,7 +120,7 @@ jobs:
           brew services stop postgresql@17
           brew uninstall agentiik/tap/agentiik
           rm -rf "$(brew --prefix)/etc/agentiik" "$(brew --prefix)/var/log/agentiik"
-          if security find-certificate -a -c "Agentiik local CA" /Library/Keychains/System.keychain; then exit 1; fi
+          if security find-certificate -a /Library/Keychains/System.keychain | grep 'Agentiik local CA'; then exit 1; fi
 
       - name: logs
         if: always()
