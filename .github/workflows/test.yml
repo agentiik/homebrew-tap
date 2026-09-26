@@ -53,7 +53,9 @@ jobs:
       # --HEAD until v0.2.1 is tagged and the formulae bumped to it: agentiik-setup runs agentiik-api namespace create,
       # which v0.2.0 lacks. Otherwise the README's command.
       - name: install
-        run: brew install --HEAD agentiik/tap/agentiik postgresql@17
+        run: |
+          brew install --HEAD agentiik/tap/agentiik
+          brew install postgresql@17
 
       - name: set up
         run: |
