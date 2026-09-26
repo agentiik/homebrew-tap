@@ -13,8 +13,8 @@ class Agentiik < Formula
   desc "Server programs: API, controller and runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
   url "https://github.com/agentiik/agentiik.git",
-      tag:      "v0.2.2",
-      revision: "d3a58fe5b0ebca23c389821de54fc17bdcb11e6b"
+      tag:      "v0.2.3",
+      revision: "dbe64b4f9f31b7b2d9602ae13f0fe5afac2e3912"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
