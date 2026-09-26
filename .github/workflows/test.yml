@@ -85,7 +85,8 @@ jobs:
           cat pools.json
           grep -q '"runner_pools"' pools.json
           test "$(curl -s -o /dev/null -w '%{http_code}' --cacert "$ca" "$AGENTIIK_SERVER/api/v1/runner-pools")" = 401
-          brew services list | grep -E '^agentiik +started'
+          brew services info --json agentiik/tap/agentiik | tee info.json
+          grep -Eq '"running": *true' info.json
 
       - name: agk push, through the keychain's trust
         run: |

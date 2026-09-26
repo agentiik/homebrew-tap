@@ -60,7 +60,8 @@ trap 'say "asked to stop"; stop; exit 0' TERM INT
 
 start nats-server "" "$prefix/bin/nats-server" -c "$etc/nats-server.conf"
 
-# The API connects to the bus as it starts, and refuses to start without it.
+# The API connects to the bus as it starts, and refuses to start without it. nats-server logs this probe, which
+# closes before any TLS, as a handshake error once per start.
 bus="$(. "$etc/api.env" && printf '%s' "${AGK_BUS_URL#*://}")"
 host="${bus%:*}"
 port="${bus##*:}"
