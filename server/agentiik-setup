@@ -218,7 +218,7 @@ authorityKeyIdentifier = keyid
 EOF
   (umask 077 && openssl ecparam -name prime256v1 -genkey -noout -out "$work/ca.key")
   openssl req -x509 -new -sha256 -key "$work/ca.key" -days 825 -config "$work/openssl.cnf" -extensions ca \
-    -subj "/CN=Agentiik local CA, $(hostname -s), $(date -u +%Y-%m-%dT%H:%M:%SZ)" -out "$work/ca.pem"
+    -subj "/CN=Agentiik local CA $(date -u +%Y-%m-%dT%H:%M:%SZ)" -out "$work/ca.pem"
   (umask 077 && openssl ecparam -name prime256v1 -genkey -noout -out "$tls/server.key")
   openssl req -new -sha256 -key "$tls/server.key" -subj "/CN=localhost" -config "$work/openssl.cnf" -out "$work/server.csr"
   openssl x509 -req -sha256 -in "$work/server.csr" -CA "$work/ca.pem" -CAkey "$work/ca.key" \
