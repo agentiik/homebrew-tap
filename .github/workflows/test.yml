@@ -56,10 +56,12 @@ jobs:
       - name: set up
         run: |
           brew services start postgresql@17
-          agentiik-setup | tee setup.log
+          agentiik-setup > setup.log
           token="$(sed -n 's/^  export AGENTIIK_TOKEN=//p' setup.log)"
           test -n "$token"
+          # Masked before the output is shown, so the log carries no working token.
           echo "::add-mask::$token"
+          cat setup.log
           echo "AGENTIIK_TOKEN=$token" >> "$GITHUB_ENV"
           echo "AGENTIIK_SERVER=https://localhost:8443" >> "$GITHUB_ENV"
 
@@ -77,9 +79,10 @@ jobs:
         run: |
           ca="$(brew --prefix)/etc/agentiik/tls/ca.pem"
           for _ in $(seq 1 60); do
-            if curl -fsS --cacert "$ca" -H "Authorization: Bearer $AGENTIIK_TOKEN" "$AGENTIIK_SERVER/api/v1/runner-pools" | tee pools.json; then break; fi
+            if curl -fsS --cacert "$ca" -H "Authorization: Bearer $AGENTIIK_TOKEN" -o pools.json "$AGENTIIK_SERVER/api/v1/runner-pools"; then break; fi
             sleep 2
           done
+          cat pools.json
           grep -q '"runner_pools"' pools.json
           test "$(curl -s -o /dev/null -w '%{http_code}' --cacert "$ca" "$AGENTIIK_SERVER/api/v1/runner-pools")" = 401
           brew services list | grep -E '^agentiik +started'
@@ -121,6 +124,7 @@ jobs:
       - name: logs
         if: always()
         run: |
+          brew services list
           tail -n 100 "$(brew --prefix)"/var/log/agentiik/*.log 2>/dev/null || true
 
   # What a person gets from the README, with nothing of this checkout: the tap from GitHub, the
