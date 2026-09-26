@@ -29,5 +29,5 @@ jobs:
 
       - name: agentiik
         run: |
-          brew install --HEAD agentiik/tap/agentiik
+          brew install --build-from-source agentiik/tap/agentiik
           brew test agentiik/tap/agentiik

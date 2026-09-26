@@ -4,11 +4,13 @@
 # a NATS server with JetStream, which this formula does not pull in: they are as often on another
 # machine as on this one. The caveats say how to get both locally.
 #
-# The server programs are not in a tagged release yet, so until v0.2.0 is tagged this formula
-# builds from main only (`brew install --HEAD`), and a stable url is added with the tag.
+# Built from the tagged source, as agk is, so that go build stamps the version from the tag.
 class Agentiik < Formula
   desc "Server programs: API, controller and runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
+  url "https://github.com/agentiik/agentiik.git",
+      tag:      "v0.2.0",
+      revision: "3f901fb2af236c97412e8ea5d345f05dd429a228"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
