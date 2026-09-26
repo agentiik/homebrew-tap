@@ -10,7 +10,7 @@ class Agentiik < Formula
   homepage "https://agentiik.github.io/docs"
   url "https://github.com/agentiik/agentiik.git",
       tag:      "v0.2.0",
-      revision: "3f901fb2af236c97412e8ea5d345f05dd429a228"
+      revision: "6ede6bc7674730750d3d0a1fc9dd4228a3d78976"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
