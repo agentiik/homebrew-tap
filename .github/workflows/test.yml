@@ -37,6 +37,92 @@ jobs:
           brew install --build-from-source agentiik/tap/agentiik
           brew test agentiik/tap/agentiik
 
+  # A server on this Mac, as the README's "Run a server with Homebrew" says, command for command: install, set up,
+  # start, check it answers, point agk at it, stop, remove. The formula comes from this checkout's tap, since the
+  # point is to prove the pull request's formula, scripts and settings before they reach main.
+  server:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tap
+        run: |
+          brew tap agentiik/tap "$GITHUB_WORKSPACE"
+          if brew trust --help >/dev/null 2>&1; then brew trust agentiik/tap; fi
+
+      - name: install
+        run: brew install agentiik/tap/agentiik postgresql@17
+
+      - name: set up
+        run: |
+          brew services start postgresql@17
+          agentiik-setup | tee setup.log
+          token="$(sed -n 's/^  export AGENTIIK_TOKEN=//p' setup.log)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "AGENTIIK_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "AGENTIIK_SERVER=https://localhost:8443" >> "$GITHUB_ENV"
+
+      - name: set up again, which keeps everything
+        run: |
+          agentiik-setup | tee again.log
+          # A negated command does not stop a step under bash -e, so each check fails it by hand.
+          if grep -E '^(wrote|created) ' again.log; then exit 1; fi
+          if grep -q '^  export AGENTIIK_TOKEN=[0-9a-f]' again.log; then exit 1; fi
+
+      - name: start
+        run: brew services start agentiik/tap/agentiik
+
+      - name: it answers the operator, and nobody else
+        run: |
+          ca="$(brew --prefix)/etc/agentiik/tls/ca.pem"
+          for _ in $(seq 1 60); do
+            if curl -fsS --cacert "$ca" -H "Authorization: Bearer $AGENTIIK_TOKEN" "$AGENTIIK_SERVER/api/v1/runner-pools" | tee pools.json; then break; fi
+            sleep 2
+          done
+          grep -q '"runner_pools"' pools.json
+          test "$(curl -s -o /dev/null -w '%{http_code}' --cacert "$ca" "$AGENTIIK_SERVER/api/v1/runner-pools")" = 401
+          brew services list | grep -E '^agentiik +started'
+
+      - name: agk push, through the keychain's trust
+        run: |
+          mkdir hello && cd hello
+          git init -q
+          cat > agentiik.yaml <<'EOF'
+          apiVersion: agentiik.dev/v1
+          kind: Workflow
+          metadata:
+            name: hello
+          steps:
+            greet:
+              image: alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
+              outputs: [out]
+              script:
+                - echo hello
+          EOF
+          git add agentiik.yaml
+          git -c user.name=ci -c user.email=ci@example.com commit -qm hello
+          agk push --namespace runner
+
+      - name: stop
+        run: |
+          brew services stop agentiik/tap/agentiik
+          sleep 5
+          if pgrep -l -x 'agentiik-api|agentiik-controller|nats-server'; then exit 1; fi
+
+      - name: remove
+        run: |
+          agentiik-setup remove --yes
+          brew services stop postgresql@17
+          brew uninstall agentiik/tap/agentiik
+          rm -rf "$(brew --prefix)/etc/agentiik" "$(brew --prefix)/var/log/agentiik"
+          if security find-certificate -a -c "Agentiik local CA" /Library/Keychains/System.keychain; then exit 1; fi
+
+      - name: logs
+        if: always()
+        run: |
+          tail -n 100 "$(brew --prefix)"/var/log/agentiik/*.log 2>/dev/null || true
+
   # What a person gets from the README, with nothing of this checkout: the tap from GitHub, the
   # formulae as main holds them, and each program naming the tag it was built from. Run where main
   # moves or a tag lands, since a pull request's formulae are not on GitHub's main yet.
