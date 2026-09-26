@@ -236,7 +236,8 @@ remove() {
     sha1="$(openssl x509 -in "$tls/ca.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')"
     if security find-certificate -Z -a "$keychain" 2>/dev/null | grep -q "$sha1"; then
       say "Removing $tls/ca.pem from $keychain, which asks for your password."
-      sudo security remove-trusted-cert -d "$tls/ca.pem" || true
+      # Deleted rather than untrusted first: remove-trusted-cert waits for a confirmation no terminal can give,
+      # and the trust setting left behind names a certificate that is no longer anywhere to trust.
       sudo security delete-certificate -Z "$sha1" "$keychain"
     fi
     say "removed   the certificate authority from $keychain"
