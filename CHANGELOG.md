@@ -2,6 +2,10 @@
 
 The releases of `homebrew-tap`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## v0.2.2, 2026-09-26
+
+- `agk` and `agentiik` build from `v0.2.2`.
+
 ## v0.2.1, 2026-09-26
 
 - `agk` and `agentiik` build from `v0.2.1`.
