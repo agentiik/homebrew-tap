@@ -8,6 +8,9 @@ set -euo pipefail
 prefix="@HOMEBREW_PREFIX@"
 etc="$prefix/etc/agentiik"
 secrets="$etc/secrets"
+# The bootstrap token, as AGK_OPERATOR_TOKEN=..., in a settings file of its own, the equivalent of a Compose file's .env:
+# agentiik-server hands it to agentiik-api migrate alone at every start, since every other program refuses it.
+token_env="$etc/operator-token.env"
 tls="$etc/tls"
 state="$prefix/var/lib/agentiik"
 logs="$prefix/var/log/agentiik"
@@ -23,7 +26,7 @@ admin_url="${AGK_MIGRATE_DATABASE_URL:-postgres://$(id -un)@/$database?host=$soc
 usage() {
   cat <<EOF
 usage:
-  agentiik-setup [--namespace NAME]   prepare this Mac's server: secrets, TLS, database, bus, operator token
+  agentiik-setup [--namespace NAME]   prepare this Mac's server: secrets, TLS, bootstrap token, database, bus
   agentiik-setup remove --yes         undo it: the keychain entry, the database and role, every secret and state
 
 --namespace is the namespace workflows are pushed to, $(default_namespace) by default, which this creates with
@@ -67,6 +70,19 @@ secret() {
   fi
   (umask 077 && cat >"$path")
   say "wrote     $path"
+}
+
+# migrate runs agentiik-api migrate on api.env and the bootstrap token's settings file, where there is one.
+migrate() {
+  (
+    set -a
+    # shellcheck disable=SC1090
+    . "$etc/api.env"
+    # shellcheck disable=SC1090
+    if [ -f "$token_env" ]; then . "$token_env"; fi
+    set +a
+    AGK_MIGRATE_DATABASE_URL="$admin_url" exec "$prefix/bin/agentiik-api" migrate
+  )
 }
 
 # settings FILE runs the rest of the line with the variables FILE holds, and those alone of the AGK_* kind.
@@ -133,6 +149,20 @@ prepare() {
     say "trusted   $tls/ca.pem is in $keychain"
   fi
 
+  step "Bootstrap token"
+  local token=""
+  if [ -s "$token_env" ]; then
+    say "kept      $token_env"
+  elif [ -s "$secrets/operator-token.sha256" ]; then
+    # A server set up by v0.2 keeps the token it printed then: agentiik-api migrate imports its hash, once.
+    say "kept      the operator token v0.2 printed, whose hash migrate imports from $secrets/operator-token.sha256"
+  else
+    token="$(openssl rand -hex 32)"
+    (umask 077 && printf 'AGK_OPERATOR_TOKEN=%s\n' "$token" >"$token_env")
+    chmod 600 "$token_env"
+    say "wrote     $token_env"
+  fi
+
   step "Database"
   if [ "$("$psql" -h "$socket" -d postgres -Atqc "select 1 from pg_database where datname = '$database'")" = 1 ]; then
     say "kept      the database $database"
@@ -140,7 +170,7 @@ prepare() {
     "$createdb" -h "$socket" "$database"
     say "created   the database $database"
   fi
-  AGK_MIGRATE_DATABASE_URL="$admin_url" settings "$etc/api.env" "$prefix/bin/agentiik-api" migrate
+  migrate
   settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
 
   step "Bus identity"
@@ -148,17 +178,6 @@ prepare() {
     say "kept      $state/bus"
   else
     "$prefix/bin/agentiik-api" bus-init "$state/bus"
-  fi
-
-  step "Operator token"
-  local token=""
-  if [ -s "$secrets/operator-token.sha256" ]; then
-    say "kept      $secrets/operator-token.sha256"
-    say "The token was printed once, when it was made. To make another, remove that file, run agentiik-setup again,"
-    say "and restart the service."
-  else
-    token="$(openssl rand -hex 32)"
-    printf '%s' "$token" | shasum -a 256 | cut -d' ' -f1 | secret operator-token.sha256
   fi
 
   step "Done"
@@ -175,10 +194,13 @@ EOF
     cat <<EOF
   export AGENTIIK_TOKEN=$token
 
-That is the operator token, which is allowed everything, and it is shown this once: only its hash is kept.
+That is the bootstrap token, kept in $token_env, readable by you alone. It administers the server until the first
+administrator has enrolled a passkey, and then works no more: https://agentiik.github.io/docs/#first-run
 EOF
+  elif [ -s "$token_env" ]; then
+    say "  export AGENTIIK_TOKEN=\"\$(sed -n 's/^AGK_OPERATOR_TOKEN=//p' $token_env)\""
   else
-    say "  export AGENTIIK_TOKEN=<the operator token printed when it was made>"
+    say "  export AGENTIIK_TOKEN=<the operator token v0.2 printed when it was made>"
   fi
   cat <<EOF
 
@@ -247,8 +269,8 @@ remove() {
   else
     say "PostgreSQL does not answer, so the database $database and the role $role are left as they are"
   fi
-  rm -rf "$secrets" "$tls" "$state"
-  say "removed   $secrets, $tls and $state"
+  rm -rf "$secrets" "$tls" "$state" "$token_env"
+  say "removed   $secrets, $tls, $state and $token_env"
   say "The settings in $etc and the logs in $logs are left: brew uninstall agentiik/tap/agentiik, then rm -rf $etc $logs"
 }
 
