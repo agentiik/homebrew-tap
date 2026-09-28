@@ -17,32 +17,35 @@ logs="$prefix/var/log/agentiik"
 keychain="/Library/Keychains/System.keychain"
 
 # The database the settings files name, reached over PostgreSQL's socket in /tmp, where Homebrew's PostgreSQL
-# puts it. The role that migrates is the one Homebrew's PostgreSQL made for whoever installed it.
+# puts it. The role that migrates is the one Homebrew's PostgreSQL made for whoever installed it, unless
+# AGK_MIGRATE_DATABASE_URL names another in api.env, where agentiik-server reads it too.
 socket="/tmp"
 database="agentiik"
 role="agentiik"
-admin_url="${AGK_MIGRATE_DATABASE_URL:-postgres://$(id -un)@/$database?host=$socket}"
+admin_url="postgres://$(id -un)@/$database?host=$socket"
+
+# The namespace made where none is named and the server holds none, as Compose's init makes it: never one named
+# after whoever installs, since logins and namespaces share one name space, and the one they would take is the
+# login they want as first administrator.
+default_namespace="demo"
 
 usage() {
   cat <<EOF
 usage:
-  agentiik-setup [--namespace NAME]   prepare this Mac's server: secrets, TLS, bootstrap token, database, bus
+  agentiik-setup [--namespace NAME]   prepare this Mac's server: secrets, TLS, bootstrap token, database, namespace, bus
   agentiik-setup remove --yes         undo it: the keychain entry, the database and role, every secret and state
 
---namespace is the namespace workflows are pushed to, $(default_namespace) by default, which this creates with
-agentiik-api namespace create until v0.3.0 has a route for it. The settings are in $etc, and https://agentiik.github.io/docs/#configuration
-says what each is.
+--namespace creates a namespace workflows are pushed to. Without it, this creates $default_namespace where the server
+holds no namespace yet, and otherwise keeps the ones it holds. A namespace made here has no owner until the first
+administrator, whom the bootstrap token creates with agk user create LOGIN --admin, is given every namespace nobody
+owns; after that, an administrator gives one with agk share NAME --user LOGIN --role owner. The settings are in
+$etc, and https://agentiik.github.io/docs/#configuration says what each is.
 EOF
 }
 
 say() { printf '%s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 die() { printf 'agentiik-setup: %s\n' "$*" >&2; exit 1; }
-
-# default_namespace is this user's name, as a namespace is spelled: lowercase letters and digits, joined by dashes.
-default_namespace() {
-  id -un | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
-}
 
 # pg finds a PostgreSQL client program: on the PATH, or in the newest Homebrew postgresql@N, which is keg-only.
 pg() {
@@ -72,7 +75,8 @@ secret() {
   say "wrote     $path"
 }
 
-# migrate runs agentiik-api migrate on api.env and the bootstrap token's settings file, where there is one.
+# migrate runs agentiik-api migrate on api.env and the bootstrap token's settings file, where there is one, as
+# agentiik-server runs it at every start.
 migrate() {
   (
     set -a
@@ -80,8 +84,9 @@ migrate() {
     . "$etc/api.env"
     # shellcheck disable=SC1090
     if [ -f "$token_env" ]; then . "$token_env"; fi
+    AGK_MIGRATE_DATABASE_URL="${AGK_MIGRATE_DATABASE_URL:-$admin_url}"
     set +a
-    AGK_MIGRATE_DATABASE_URL="$admin_url" exec "$prefix/bin/agentiik-api" migrate
+    exec "$prefix/bin/agentiik-api" migrate
   )
 }
 
@@ -98,11 +103,13 @@ settings() {
   )
 }
 
+# prepare NAMESPACE prepares the server, and creates NAMESPACE, or the default namespace where NAMESPACE is empty.
 prepare() {
   local namespace="$1"
   [ "$(uname -s)" = Darwin ] || die "this prepares a server on macOS, trusted through its keychain: on Linux, https://agentiik.github.io/docs/#configuration"
   [ "$(id -u)" -ne 0 ] || die "run it as the user brew services runs the server as, not as root: it asks for sudo once, to trust the certificate"
-  printf '%s' "$namespace" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' || die "$namespace is not a namespace: lowercase letters and digits, joined by dashes"
+  [ -z "$namespace" ] || printf '%s' "$namespace" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' ||
+    die "$namespace is not a namespace: lowercase letters and digits, joined by dashes"
   [ -f "$etc/api.env" ] && [ -f "$etc/controller.env" ] && [ -f "$etc/nats-server.conf" ] ||
     die "$etc is missing a settings file: brew reinstall agentiik/tap/agentiik writes it again"
 
@@ -154,8 +161,10 @@ prepare() {
   if [ -s "$token_env" ]; then
     say "kept      $token_env"
   elif [ -s "$secrets/operator-token.sha256" ]; then
-    # A server set up by v0.2 keeps the token it printed then: agentiik-api migrate imports its hash, once.
-    say "kept      the operator token v0.2 printed, whose hash migrate imports from $secrets/operator-token.sha256"
+    # A server set up by v0.2 keeps the token it printed then, which is its bootstrap token now: agentiik-api
+    # migrate imports its hash, once. A new token here would replace that hash, and the token printed then with it.
+    say "kept      the token a v0.2 setup printed, the bootstrap token now: migrate imports its hash, once, from"
+    say "          $secrets/operator-token.sha256"
   else
     token="$(openssl rand -hex 32)"
     (umask 077 && printf 'AGK_OPERATOR_TOKEN=%s\n' "$token" >"$token_env")
@@ -171,7 +180,26 @@ prepare() {
     say "created   the database $database"
   fi
   migrate
-  settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
+
+  step "Namespace"
+  if [ -n "$namespace" ]; then
+    settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
+  else
+    # The namespaces this server holds, the first made first, read as whoever runs this, who made the database:
+    # where there is one, an earlier setup made it, a v0.2 one named after its user, and it is kept as it is rather
+    # than joined by a $default_namespace nobody asked for. The first administrator is given it like any other
+    # namespace nobody owns.
+    local held
+    held="$("$psql" -h "$socket" -d "$database" -Atqc 'select name from namespaces order by created_at, name')"
+    if [ -z "$held" ]; then
+      namespace="$default_namespace"
+      settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
+    else
+      namespace="${held%%$'\n'*}"
+      say "kept      the namespaces this server holds, $(printf '%s' "$held" | tr '\n' ',' | sed 's/,/, /g'):"
+      say "          $default_namespace is made only where there is none"
+    fi
+  fi
 
   step "Bus identity"
   if [ -s "$state/bus/accounts.conf" ]; then
@@ -186,31 +214,30 @@ Start the server, and have it start again at login:
 
   brew services start agentiik/tap/agentiik
 
-Its logs are in $logs. Point agk at it, in the shell you run agk from:
+Its logs are in $logs. Point agk at it, in the shell you run agk from, and check that it answers:
 
   export AGENTIIK_SERVER=https://localhost:8443
 EOF
   if [ -n "$token" ]; then
-    cat <<EOF
-  export AGENTIIK_TOKEN=$token
-
-That is the bootstrap token, kept in $token_env, readable by you alone. It administers the server until the first
-administrator has enrolled a passkey, and then works no more: https://agentiik.github.io/docs/#first-run
-EOF
+    say "  export AGENTIIK_TOKEN=$token"
   elif [ -s "$token_env" ]; then
     say "  export AGENTIIK_TOKEN=\"\$(sed -n 's/^AGK_OPERATOR_TOKEN=//p' $token_env)\""
   else
-    say "  export AGENTIIK_TOKEN=<the operator token v0.2 printed when it was made>"
+    say "  export AGENTIIK_TOKEN=<the token agentiik-setup printed when this server was set up>"
   fi
   cat <<EOF
-
-Check that it answers:
-
   curl --cacert $tls/ca.pem -H "Authorization: Bearer \$AGENTIIK_TOKEN" https://localhost:8443/api/v1/runner-pools
 
-and push a workflow with agk push --namespace $namespace. A runner is a Linux host:
+Push a workflow with agk push --namespace $namespace. A runner is a Linux host:
 https://agentiik.github.io/docs/#installing-a-runner
+
 EOF
+  if [ -n "$token" ]; then
+    say "The token above is the bootstrap token, kept in $token_env and readable by you alone,"
+  else
+    say "The token above is the bootstrap token until the first administrator has signed in,"
+  fi
+  say "whose one lasting use is agk user create LOGIN --admin: https://agentiik.github.io/docs/#first-run"
 }
 
 # certificates makes a certificate authority, signs one certificate for localhost with it, and deletes its key.
@@ -276,10 +303,10 @@ remove() {
 
 case "${1:-}" in
   "" )
-    prepare "$(default_namespace)"
+    prepare ""
     ;;
   --namespace )
-    [ $# -eq 2 ] || { usage >&2; exit 2; }
+    [ $# -eq 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }
     prepare "$2"
     ;;
   remove )

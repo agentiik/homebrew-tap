@@ -22,14 +22,17 @@ A server on this Mac alone: PostgreSQL and NATS from Homebrew, the API on `https
 ```
 brew install agentiik/tap/agentiik postgresql@17
 brew services start postgresql@17
-agentiik-setup                                  # once: prints the operator token, shown this once
-brew services start agentiik/tap/agentiik       # the bus, the API and the controller, again at every login
+agentiik-setup                                  # once: prints the bootstrap token
+brew services start agentiik/tap/agentiik       # migrate, then the bus, the API and the controller, again at every login
 
 export AGENTIIK_SERVER=https://localhost:8443
 export AGENTIIK_TOKEN=<the token agentiik-setup printed>
 curl --cacert "$(brew --prefix)/etc/agentiik/tls/ca.pem" -H "Authorization: Bearer $AGENTIIK_TOKEN" "$AGENTIIK_SERVER/api/v1/runner-pools"
-agk push --namespace <the namespace it named>    # from a workflow's repository
+agk push --namespace demo                       # from a workflow's repository
+agk user create <login> --admin                 # the first administrator: open the link it answers
 
+brew upgrade agentiik/tap/agentiik              # upgrade: the service migrates as it starts again
+brew services restart agentiik/tap/agentiik
 brew services stop agentiik/tap/agentiik        # stop
 agentiik-setup remove --yes                     # uninstall: the database, the secrets, the keychain entry
 brew uninstall agentiik/tap/agentiik
@@ -38,10 +41,13 @@ rm -rf "$(brew --prefix)/etc/agentiik" "$(brew --prefix)/var/log/agentiik"
 
 | Step | Does |
 | --- | --- |
-| `agentiik-setup` | Writes the secret files, readable by their owner alone; a certificate for `localhost`, signed by an authority it adds to the System keychain (it asks for your password) and whose key it then deletes; the database, `agentiik-api migrate`, and a namespace named after you with `agentiik-api namespace create` (`--namespace` to choose); the bus identity with `agentiik-api bus-init`; the operator token. Run again, it keeps all of that and repairs what is missing. |
-| `brew services start agentiik/tap/agentiik` | Runs `agentiik-server`, which starts `nats-server`, `agentiik-api serve` and `agentiik-controller`, stops all three if one ends so that launchd starts them again, and stops them at `brew services stop`. |
+| `agentiik-setup` | Writes the secret files, readable by their owner alone; a certificate for `localhost`, signed by an authority it adds to the System keychain (it asks for your password) and whose key it then deletes; the bootstrap token, in `operator-token.env`, readable by you alone; the database, and `agentiik-api migrate` given that token; the namespace `demo` with `agentiik-api namespace create` where the server holds none (`--namespace` to create another); the bus identity with `agentiik-api bus-init`. Run again, it keeps all of that and repairs what is missing. |
+| `brew services start agentiik/tap/agentiik` | Runs `agentiik-server`, which runs `agentiik-api migrate` with `api.env` and `operator-token.env`, then starts `nats-server`, `agentiik-api serve` and `agentiik-controller`, stops all three if one ends so that launchd starts them again, and stops them at `brew services stop`. |
+| `agk user create <login> --admin` | Creates the [first administrator](https://agentiik.github.io/docs/#first-run) with the bootstrap token, which is its one lasting use, gives them every namespace nobody owns, and answers the link that enrols their passkey; the token works until they have signed in. |
 
-The settings are in `$(brew --prefix)/etc/agentiik`: `api.env` and `controller.env`, one per program since each reads its own [settings](https://agentiik.github.io/docs/#configuration), and `nats-server.conf`. Homebrew keeps them across upgrades. The logs are in `$(brew --prefix)/var/log/agentiik`.
+The settings are in `$(brew --prefix)/etc/agentiik`: `api.env` and `controller.env`, one per program since each reads its own [settings](https://agentiik.github.io/docs/#configuration), `nats-server.conf`, and `operator-token.env`, which only `migrate` is given, since every other program refuses the token. Homebrew keeps them across upgrades. The logs are in `$(brew --prefix)/var/log/agentiik`.
+
+The namespace is `demo`, as in the Compose installation: logins and namespaces share one name space, and one named after you would take the login you want. A server set up by v0.2 keeps its namespace, and the token it printed, which the first start after `brew upgrade` imports as the bootstrap token.
 
 The certificate is trusted through the keychain because the programs, `agk` included, trust what macOS trusts, and Go reads no `SSL_CERT_FILE` on macOS. `curl` reads its own list, hence `--cacert`.
 
@@ -56,7 +62,7 @@ Every repository of the organisation carries the same version and is tagged at t
 
 It clones rather than fetching an archive because `go build` stamps the version from the tag, so `agk --version` names the release.
 
-CI builds and tests both formulae on macOS for every pull request, and runs the server exactly as [Run a server with Homebrew](#run-a-server-with-homebrew) says.
+CI builds and tests both formulae on macOS for every pull request, runs the server exactly as [Run a server with Homebrew](#run-a-server-with-homebrew) says, and upgrades a server the previous release's tap set up to this checkout's. Until the formulae name the tag of the release `CHANGELOG.md` names last, the server jobs build the engine's `main` with `--HEAD`, so that the scripts are tested against the programs they will be released with.
 
 ## Licence
 

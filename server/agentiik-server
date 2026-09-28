@@ -1,15 +1,17 @@
 #!/bin/bash
 # agentiik-server: a server on this Mac alone, as the one service `brew services start agentiik/tap/agentiik` runs.
 #
-# It starts three programs, each with its own settings and its own log in @HOMEBREW_PREFIX@/var/log/agentiik:
-# nats-server on etc/agentiik/nats-server.conf, then agentiik-api serve on api.env, then agentiik-controller on
-# controller.env. One service rather than three, because Homebrew gives a formula one service, and the three are one
-# installation: the API refuses to start without its bus, and a controller without the API has nobody to serve.
+# It runs agentiik-api migrate first, at every start, as a Compose file runs init, so that `brew upgrade` and a restart
+# are the whole of an upgrade: the release's migrations, and the bootstrap token's hash kept where the API reads it,
+# from operator-token.env, or once from the file a v0.2 setup kept it in. Then it starts three programs, each with its
+# own settings and its own log in @HOMEBREW_PREFIX@/var/log/agentiik: nats-server on etc/agentiik/nats-server.conf, then
+# agentiik-api serve on api.env, then agentiik-controller on controller.env. One service rather than three, because
+# Homebrew gives a formula one service, and the three are one installation: the API refuses to start without its bus,
+# and a controller without the API has nobody to serve.
 #
-# Before them it runs agentiik-api migrate, at every start, as a Compose file runs init: so `brew upgrade` and a restart
-# are the whole upgrade, and the bootstrap token in operator-token.env, or the hash a v0.2 setup kept, is where the API
-# reads it. If any of them ends, it stops the other two and exits 1, and launchd starts all three again. At SIGTERM,
-# which `brew services stop` sends, it stops them in the reverse order, waits for each, and exits 0.
+# If migrate fails, it exits 1, and so it does if any of the three ends, once it has stopped the other two: launchd
+# starts it all again. At SIGTERM, which `brew services stop` sends, it stops them in the reverse order, waits for each,
+# and exits 0.
 set -u
 
 prefix="@HOMEBREW_PREFIX@"
@@ -63,20 +65,21 @@ trap 'say "asked to stop"; stop; exit 0' TERM INT
 
 # This release's migrations, and the bootstrap token's hash: api.env, and operator-token.env where agentiik-setup wrote
 # one, given to migrate alone, since every other program refuses AGK_OPERATOR_TOKEN. The role that migrates is the one
-# Homebrew's PostgreSQL made for whoever installed it, as in agentiik-setup.
+# Homebrew's PostgreSQL made for whoever installed it, as in agentiik-setup, unless api.env names another.
 if ! (
   set -a
   # shellcheck disable=SC1090
   . "$etc/api.env"
   # shellcheck disable=SC1090
   if [ -f "$etc/operator-token.env" ]; then . "$etc/operator-token.env"; fi
+  AGK_MIGRATE_DATABASE_URL="${AGK_MIGRATE_DATABASE_URL:-postgres://$(id -un)@/agentiik?host=/tmp}"
   set +a
-  AGK_MIGRATE_DATABASE_URL="postgres://$(id -un)@/agentiik?host=/tmp" exec "$prefix/bin/agentiik-api" migrate
+  exec "$prefix/bin/agentiik-api" migrate
 ) >>"$logs/migrate.log" 2>&1; then
   say "agentiik-api migrate failed: $logs/migrate.log says why"
   exit 1
 fi
-say "migrated, the bootstrap token's hash kept: $logs/migrate.log"
+say "migrated: $logs/migrate.log says what it applied and kept"
 
 start nats-server "" "$prefix/bin/nats-server" -c "$etc/nats-server.conf"
 
