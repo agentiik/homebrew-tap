@@ -5,7 +5,7 @@ The releases of `homebrew-tap`. Every repository carries the same version and is
 ## v0.3.0, 2026-09-28
 
 - `agk` and `agentiik` build from `v0.3.0`.
-- `agentiik-server` runs `agentiik-api migrate` at every start, before the bus, the API and the controller, so that `brew upgrade` and `brew services restart` are the whole of an upgrade. It migrates as the role Homebrew's PostgreSQL made for you, unless `api.env` sets `AGK_MIGRATE_DATABASE_URL`.
+- `agentiik-server` runs `agentiik-api migrate` at every start, before the bus, the API and the controller, so that `brew upgrade` and `brew services restart` are the whole of an upgrade. It migrates as the role Homebrew's PostgreSQL made for you, unless `api.env` sets `AGK_MIGRATE_DATABASE_URL`, which `agentiik-setup` now refuses from the shell, since the service could not read it there.
 - `agentiik-setup` keeps the bootstrap token in `etc/agentiik/operator-token.env`, mode 0600, which `migrate` alone is given. A server set up by v0.2 keeps the token it printed: the first start imports its hash, once.
 - `agentiik-setup` creates the namespace `demo` rather than one named after you, and only where the server holds none, since logins and namespaces share one name space.
 - `agentiik-setup`, the caveats and the README name the bootstrap token, and end at creating the first administrator with `agk user create LOGIN --admin`.
