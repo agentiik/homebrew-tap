@@ -5,16 +5,18 @@
 # and the controller under one wrapper, agentiik-server, since Homebrew gives a formula one service
 # and the three are one installation. nats-server is a dependency because the service runs it;
 # PostgreSQL is not, because the service does not run it and whichever PostgreSQL answers on /tmp
-# will do. agentiik-setup prepares everything once, and the settings are files in etc/agentiik,
-# which Homebrew keeps across upgrades. The scripts and the settings are in server/ in this tap.
+# will do. agentiik-setup prepares everything once, the service runs agentiik-api migrate at every
+# start, so that brew upgrade and a restart are the whole of an upgrade, and the settings are files
+# in etc/agentiik, which Homebrew keeps across upgrades. The scripts and the settings are in server/
+# in this tap.
 #
 # Built from the tagged source, as agk is, so that go build stamps the version from the tag.
 class Agentiik < Formula
   desc "Server programs: API, controller and runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
   url "https://github.com/agentiik/agentiik.git",
-      tag:      "v0.2.5",
-      revision: "d2f1e8ba6a0dceec92962ae00de1f0d1c15e5bf4"
+      tag:      "v0.3.0",
+      revision: "4e6d3b020b94b119b5e2405e1f22619db3b397ca"
   license "AGPL-3.0-or-later"
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
@@ -49,7 +51,11 @@ class Agentiik < Formula
         brew services start postgresql@17
         agentiik-setup
         brew services start agentiik/tap/agentiik
-      agentiik-setup prints the operator token once, and the two lines that point agk at the server.
+      agentiik-setup prints the two lines that point agk at the server, the second with the bootstrap
+      token, whose one lasting use is creating the first administrator, with a login no namespace has
+      (https://agentiik.github.io/docs/#first-run):
+        agk user create LOGIN --admin
+      A server set up before is upgraded by brew services restart agentiik/tap/agentiik, which migrates.
       Settings: #{etc}/agentiik (https://agentiik.github.io/docs/#configuration)
       Logs:     #{var}/log/agentiik
 
@@ -69,6 +75,8 @@ class Agentiik < Formula
     assert_match "agentiik-setup remove", shell_output("#{bin}/agentiik-setup --help")
     assert_match "AGK_MASTER_KEY_FILE", (etc/"agentiik/api.env").read
     refute_match(/^AGK_MASTER_KEY_FILE/, (etc/"agentiik/controller.env").read)
+    # The bootstrap token is operator-token.env's, which migrate alone is given: serve refuses it.
+    refute_match(/^AGK_OPERATOR_TOKEN=/, (etc/"agentiik/api.env").read)
 
     %w[agentiik-api agentiik-controller agk-runner].each do |program|
       next unless (bin/program).exist?

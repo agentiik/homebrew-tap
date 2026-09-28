@@ -37,11 +37,55 @@ jobs:
           brew install --build-from-source agentiik/tap/agentiik
           brew test agentiik/tap/agentiik
 
-  # A server on this Mac, as the README's "Run a server with Homebrew" says, command for command: install, set up,
-  # start, check it answers, point agk at it, stop, remove. The formula comes from this checkout's tap, since the
-  # point is to prove the pull request's formula, scripts and settings before they reach main.
+  # What the server jobs build, and what the upgrade starts from. The scripts are released with the programs of the
+  # release CHANGELOG.md names last, and the formulae build those once they name its tag, which is set once the
+  # engine's tag exists. Until then the server jobs build the engine's main with --HEAD, which that tag will be cut
+  # from, so that the scripts are tested before the tag rather than after it, as deploy's single-host workflow runs the
+  # dev images of main until its release is published. The upgrade starts from the newest release tag of this
+  # repository before that release.
+  choose:
+    runs-on: ubuntu-latest
+    outputs:
+      head: ${{ steps.choose.outputs.head }}
+      from: ${{ steps.choose.outputs.from }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: choose what to build and upgrade from
+        id: choose
+        run: |
+          release="$(sed -n 's/^## \(v[0-9][0-9.]*\), .*/\1/p' CHANGELOG.md | head -n 1)"
+          test -n "$release"
+          head=""
+          for formula in agk agentiik; do
+            tag="$(sed -n 's/^ *tag: *"\(v[^"]*\)",$/\1/p' "Formula/$formula.rb")"
+            test -n "$tag"
+            echo "$formula builds $tag"
+            if [ "$tag" != "$release" ]; then head="--HEAD"; fi
+          done
+          if [ -n "$head" ]; then
+            echo "$release is not what the formulae build yet: the server jobs build the engine's main with --HEAD"
+          else
+            echo "The formulae build $release, as tagged"
+          fi
+          from="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$release" | sort -V | tail -n 1)"
+          test -n "$from"
+          echo "The upgrade starts from the tap at $from"
+          { echo "head=$head"; echo "from=$from"; } >> "$GITHUB_OUTPUT"
+
+  # A server on this Mac, as the README's "Run a server with Homebrew" says, command for command but for the upgrade,
+  # which is the upgrade job's, and the install, which builds main with --HEAD where the release is not tagged yet:
+  # install, set up, start, check it answers, point agk at it, create the first administrator, stop, remove. The
+  # formula comes from this checkout's tap, since the point is to prove the pull request's formula, scripts and settings
+  # before they reach main.
   server:
+    needs: choose
     runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      HEAD: ${{ needs.choose.outputs.head }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,24 +94,36 @@ jobs:
           brew tap agentiik/tap "$GITHUB_WORKSPACE"
           if brew trust --help >/dev/null 2>&1; then brew trust agentiik/tap; fi
 
-      # The README's command.
+      # The README's command, or the same from the engine's main where the release is not tagged yet: agk first, since
+      # agentiik depends on it, and a dependency not installed is built from its tag.
       - name: install
-        run: brew install agentiik/tap/agentiik postgresql@17
+        run: |
+          if [ -z "$HEAD" ]; then
+            brew install agentiik/tap/agentiik postgresql@17
+          else
+            brew install postgresql@17
+            brew install --HEAD agentiik/tap/agk
+            brew install --HEAD agentiik/tap/agentiik
+          fi
 
       - name: set up
         run: |
           brew services start postgresql@17
-          agentiik-setup > setup.log
+          # The token is printed last, so the log of a setup that failed holds none, and is shown as it is.
+          if ! agentiik-setup > setup.log; then cat setup.log; exit 1; fi
           token="$(sed -n 's/^  export AGENTIIK_TOKEN=//p' setup.log)"
           test -n "$token"
           # Masked before the output is shown, so the log carries no working token.
           echo "::add-mask::$token"
           cat setup.log
+          test "$(stat -f %Lp "$(brew --prefix)/etc/agentiik/operator-token.env")" = 600
+          test "$(cat "$(brew --prefix)/etc/agentiik/operator-token.env")" = "AGK_OPERATOR_TOKEN=$token"
           echo "AGENTIIK_TOKEN=$token" >> "$GITHUB_ENV"
           echo "AGENTIIK_SERVER=https://localhost:8443" >> "$GITHUB_ENV"
 
       - name: set up again, which keeps everything
         run: |
+          set -o pipefail
           agentiik-setup | tee again.log
           # A negated command does not stop a step under bash -e, so each check fails it by hand.
           if grep -E '^(wrote|created) ' again.log; then exit 1; fi
@@ -76,11 +132,13 @@ jobs:
       - name: start
         run: brew services start agentiik/tap/agentiik
 
-      - name: it answers the operator, and nobody else
+      - name: it answers the bootstrap token, and nobody else
         run: |
           ca="$(brew --prefix)/etc/agentiik/tls/ca.pem"
-          for _ in $(seq 1 60); do
+          rm -f pools.json
+          for i in $(seq 1 60); do
             if curl -fsS --cacert "$ca" -H "Authorization: Bearer $AGENTIIK_TOKEN" -o pools.json "$AGENTIIK_SERVER/api/v1/runner-pools"; then break; fi
+            if [ "$i" = 60 ]; then exit 1; fi
             sleep 2
           done
           cat pools.json
@@ -107,7 +165,14 @@ jobs:
           EOF
           git add agentiik.yaml
           git -c user.name=ci -c user.email=ci@example.com commit -qm hello
-          agk push --namespace runner
+          agk push --namespace demo
+
+      # The one lasting use of the bootstrap token. The link is shown without its code.
+      - name: the first administrator
+        run: |
+          agk user create alice --admin > admin.log
+          sed 's/#.*/#<code>/' admin.log
+          grep -Eq '^https://localhost:8443/auth/enrol#agkenrol_' admin.log
 
       - name: stop
         run: |
@@ -122,6 +187,122 @@ jobs:
           brew uninstall agentiik/tap/agentiik
           rm -rf "$(brew --prefix)/etc/agentiik" "$(brew --prefix)/var/log/agentiik"
           if security find-certificate -a /Library/Keychains/System.keychain | grep 'Agentiik local CA'; then exit 1; fi
+
+      - name: logs
+        if: always()
+        run: |
+          brew services list
+          tail -n 100 "$(brew --prefix)"/var/log/agentiik/*.log 2>/dev/null || true
+
+  # A server the previous release's tap set up, upgraded to this checkout's as a person upgrades one: brew upgrade and
+  # a restart, and nothing else. It checks that Homebrew kept the settings the previous release wrote; that the token
+  # the previous release's setup printed goes on working, as the bootstrap token it is from v0.3.0, and creates the
+  # first administrator; from a v0.2 server, that the service's migrate imported that token's hash, and that the migrate
+  # of setup run again afterwards kept that hash rather than importing it again; and that setup run again keeps every
+  # namespace as it was, making no demo beside them. Where the release is not tagged yet, brew upgrade cannot move a
+  # formula from a tag to main, so the job does what brew install asks for that: unlink it, and install it again with
+  # --HEAD.
+  upgrade:
+    needs: choose
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      HEAD: ${{ needs.choose.outputs.head }}
+      FROM: ${{ needs.choose.outputs.from }}
+      # brew update would move the tap off the commit the job puts it at.
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: tap, as it was at the previous release
+        run: |
+          brew tap agentiik/tap "$GITHUB_WORKSPACE"
+          if brew trust --help >/dev/null 2>&1; then brew trust agentiik/tap; fi
+          tap="$(brew --repository agentiik/tap)"
+          git -C "$tap" fetch -q --tags "$GITHUB_WORKSPACE"
+          git -C "$tap" checkout -q "$FROM"
+          git -C "$tap" log --oneline -1
+
+      - name: install, set up and start the previous release
+        run: |
+          brew install agentiik/tap/agentiik postgresql@17
+          brew services start postgresql@17
+          if ! agentiik-setup > setup.log; then cat setup.log; exit 1; fi
+          token="$(sed -n 's/^  export AGENTIIK_TOKEN=//p' setup.log)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          cat setup.log
+          echo "AGENTIIK_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "AGENTIIK_SERVER=https://localhost:8443" >> "$GITHUB_ENV"
+          brew services start agentiik/tap/agentiik
+
+      - name: the previous release answers its token
+        run: |
+          ca="$(brew --prefix)/etc/agentiik/tls/ca.pem"
+          rm -f pools.json
+          for i in $(seq 1 60); do
+            if curl -fsS --cacert "$ca" -H "Authorization: Bearer $AGENTIIK_TOKEN" -o pools.json "$AGENTIIK_SERVER/api/v1/runner-pools"; then break; fi
+            if [ "$i" = 60 ]; then exit 1; fi
+            sleep 2
+          done
+          grep -q '"runner_pools"' pools.json
+          agentiik-api --version
+
+      - name: upgrade to this checkout
+        run: |
+          shasum "$(brew --prefix)"/etc/agentiik/*.env "$(brew --prefix)"/etc/agentiik/*.conf > settings.sum
+          git -C "$(brew --repository agentiik/tap)" checkout -q "$GITHUB_SHA"
+          if [ -z "$HEAD" ]; then
+            brew upgrade agentiik/tap/agk agentiik/tap/agentiik
+          else
+            brew unlink agentiik/tap/agentiik agentiik/tap/agk
+            brew install --HEAD agentiik/tap/agk
+            brew install --HEAD agentiik/tap/agentiik
+          fi
+          brew services restart agentiik/tap/agentiik
+          agentiik-api --version
+          # Homebrew keeps a settings file of the previous release, and writes a newer one beside it as .default.
+          shasum -c settings.sum
+
+      - name: the previous release's token is the bootstrap token
+        run: |
+          ca="$(brew --prefix)/etc/agentiik/tls/ca.pem"
+          rm -f pools.json
+          for i in $(seq 1 60); do
+            if curl -fsS --cacert "$ca" -H "Authorization: Bearer $AGENTIIK_TOKEN" -o pools.json "$AGENTIIK_SERVER/api/v1/runner-pools"; then break; fi
+            if [ "$i" = 60 ]; then exit 1; fi
+            sleep 2
+          done
+          cat pools.json
+          grep -q '"runner_pools"' pools.json
+          migrated="$(brew --prefix)/var/log/agentiik/migrate.log"
+          cat "$migrated"
+          case "$FROM" in
+            v0.2.*) grep -q 'imported the hash of the v0.2 operator token' "$migrated" ;;
+          esac
+          agk user create alice --admin > admin.log
+          sed 's/#.*/#<code>/' admin.log
+          grep -Eq '^https://localhost:8443/auth/enrol#agkenrol_' admin.log
+
+      - name: set up again, which keeps every namespace as it was
+        run: |
+          set -o pipefail
+          namespaces() { "$(brew --prefix postgresql@17)/bin/psql" -h /tmp -d agentiik -Atc 'select name from namespaces order by name'; }
+          namespaces > before.txt
+          agentiik-setup | tee again.log
+          namespaces > after.txt
+          cat after.txt
+          diff before.txt after.txt
+          if grep -E '^(wrote|created) ' again.log; then exit 1; fi
+          if grep -q '^  export AGENTIIK_TOKEN=[0-9a-f]' again.log; then exit 1; fi
+          case "$FROM" in
+            v0.2.*)
+              grep -q 'kept the hash of the bootstrap token stored' again.log
+              if grep -q 'imported the hash' again.log; then exit 1; fi
+              ;;
+          esac
 
       - name: logs
         if: always()
