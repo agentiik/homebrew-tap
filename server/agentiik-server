@@ -65,8 +65,10 @@ trap 'say "asked to stop"; stop; exit 0' TERM INT
 
 # This release's migrations, and the bootstrap token's hash: api.env, and operator-token.env where agentiik-setup wrote
 # one, given to migrate alone, since every other program refuses AGK_OPERATOR_TOKEN. The role that migrates is the one
-# Homebrew's PostgreSQL made for whoever installed it, as in agentiik-setup, unless api.env names another.
-if ! (
+# Homebrew's PostgreSQL made for whoever installed it, as in agentiik-setup, unless api.env names another. It runs in
+# the background and is waited on, as the programs are, so that SIGTERM stops it too, however long the first
+# migration after an upgrade takes.
+(
   set -a
   # shellcheck disable=SC1090
   . "$etc/api.env"
@@ -75,10 +77,13 @@ if ! (
   AGK_MIGRATE_DATABASE_URL="${AGK_MIGRATE_DATABASE_URL:-postgres://$(id -un)@/agentiik?host=/tmp}"
   set +a
   exec "$prefix/bin/agentiik-api" migrate
-) >>"$logs/migrate.log" 2>&1; then
+) >>"$logs/migrate.log" 2>&1 &
+pids="$!"
+if ! wait "$pids"; then
   say "agentiik-api migrate failed: $logs/migrate.log says why"
   exit 1
 fi
+pids=""
 say "migrated: $logs/migrate.log says what it applied and kept"
 
 start nats-server "" "$prefix/bin/nats-server" -c "$etc/nats-server.conf"

@@ -75,10 +75,19 @@ secret() {
   say "wrote     $path"
 }
 
+# own_settings_only drops every AGK_* variable this shell was given, so that what runs next reads its settings files
+# and nothing else, as it does under the service, whose environment holds none: an AGK_OPERATOR_TOKEN exported here
+# would make namespace create refuse to start, and give migrate a token the service never sees.
+own_settings_only() {
+  # shellcheck disable=SC2046
+  unset $(compgen -e | grep '^AGK_')
+}
+
 # migrate runs agentiik-api migrate on api.env and the bootstrap token's settings file, where there is one, as
 # agentiik-server runs it at every start.
 migrate() {
   (
+    own_settings_only
     set -a
     # shellcheck disable=SC1090
     . "$etc/api.env"
@@ -95,6 +104,7 @@ settings() {
   local file="$1"
   shift
   (
+    own_settings_only
     set -a
     # shellcheck disable=SC1090
     . "$file"
@@ -112,6 +122,10 @@ prepare() {
     die "$namespace is not a namespace: lowercase letters and digits, joined by dashes"
   [ -f "$etc/api.env" ] && [ -f "$etc/controller.env" ] && [ -f "$etc/nats-server.conf" ] ||
     die "$etc is missing a settings file: brew reinstall agentiik/tap/agentiik writes it again"
+  # The service migrates at every start, and reads the role it migrates as from api.env alone: one taken from this
+  # shell would migrate here, and fail there at every start.
+  [ -z "${AGK_MIGRATE_DATABASE_URL:-}" ] ||
+    die "AGK_MIGRATE_DATABASE_URL is set in this shell, and the service, which migrates at every start, reads it from $etc/api.env alone: set it there, and unset it here"
 
   step "What this needs"
   local psql createdb
@@ -164,7 +178,7 @@ prepare() {
     # A server set up by v0.2 keeps the token it printed then, which is its bootstrap token now: agentiik-api
     # migrate imports its hash, once. A new token here would replace that hash, and the token printed then with it.
     say "kept      the token a v0.2 setup printed, the bootstrap token now: migrate imports its hash, once, from"
-    say "          $secrets/operator-token.sha256"
+    say "          $secrets/operator-token.sha256. To make another, remove that file and run agentiik-setup again."
   else
     token="$(openssl rand -hex 32)"
     (umask 077 && printf 'AGK_OPERATOR_TOKEN=%s\n' "$token" >"$token_env")
@@ -185,12 +199,13 @@ prepare() {
   if [ -n "$namespace" ]; then
     settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
   else
-    # The namespaces this server holds, the first made first, read as whoever runs this, who made the database:
-    # where there is one, an earlier setup made it, a v0.2 one named after its user, and it is kept as it is rather
-    # than joined by a $default_namespace nobody asked for. The first administrator is given it like any other
-    # namespace nobody owns.
+    # The namespaces this server holds, shared ones first and the first made first, read as whoever runs this, who
+    # made the database: where there is one, an earlier setup made it, a v0.2 one named after its user, and it is kept
+    # as it is rather than joined by a $default_namespace nobody asked for. The first administrator is given it like
+    # any other namespace nobody owns.
     local held
-    held="$("$psql" -h "$socket" -d "$database" -Atqc 'select name from namespaces order by created_at, name')"
+    held="$("$psql" -h "$socket" -d "$database" -Atqc "select name from namespaces order by kind = 'personal', created_at, name")" ||
+      die "$(id -un) could not read the namespaces the database $database holds: agentiik-setup --namespace NAME names the one to create"
     if [ -z "$held" ]; then
       namespace="$default_namespace"
       settings "$etc/api.env" "$prefix/bin/agentiik-api" namespace create "$namespace"
