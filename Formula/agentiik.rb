@@ -10,7 +10,9 @@
 # in etc/agentiik, which Homebrew keeps across upgrades. The scripts and the settings are in server/
 # in this tap.
 #
-# Built from the tagged source, as agk is, so that go build stamps the version from the tag.
+# Built from the tagged source, as agk is, so that go build stamps the version from the tag. The API
+# serves the web console from its own binary, which embeds the console's build, so the console is built
+# first, with Node, which is needed for the build alone, as Go is.
 class Agentiik < Formula
   desc "Server programs: API, controller and runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
@@ -21,12 +23,30 @@ class Agentiik < Formula
   head "https://github.com/agentiik/agentiik.git", branch: "main"
 
   depends_on "go" => :build
+  depends_on "node" => :build
   depends_on "agentiik/tap/agk"
   depends_on "nats-server"
 
   def install
     programs = %w[agentiik-api agentiik-controller agk-runner].select { |p| (buildpath/"cmd"/p).directory? }
     odie "this source holds none of the server programs" if programs.empty?
+
+    # The console, where the source holds one, from v0.6.0: built into console/dist before agentiik-api,
+    # which embeds what it finds there, and named with the version the programs record, which a build of
+    # the smallest of them reads, as the engine's release names the console of its images.
+    if (buildpath/"console/package.json").exist?
+      probe = buildpath/"version-probe"
+      system "go", "build", "-o", probe, "./cmd/agk-helper"
+      recorded = Utils.safe_popen_read("go", "version", "-m", probe)[/^\s*mod\s+\S+\s+(\S+)/, 1]
+      odie "agk-helper records no version" if recorded.nil?
+      cd "console" do
+        system "npm", "ci"
+        with_env(AGK_VERSION: recorded.delete_prefix("v")) do
+          system "npm", "run", "build"
+        end
+      end
+      odie "the console's build wrote no console/dist/index.html" unless (buildpath/"console/dist/index.html").exist?
+    end
     programs.each do |program|
       system "go", "build", *std_go_args(output: bin/program, ldflags: "-s -w"), "./cmd/#{program}"
     end
@@ -77,6 +97,11 @@ class Agentiik < Formula
     refute_match(/^AGK_MASTER_KEY_FILE/, (etc/"agentiik/controller.env").read)
     # The bootstrap token is operator-token.env's, which migrate alone is given: serve refuses it.
     refute_match(/^AGK_OPERATOR_TOKEN=/, (etc/"agentiik/api.env").read)
+
+    # The API serves the console from its own binary, from the release that has one.
+    if version.head? || version >= Version.new("0.6.0")
+      assert_match '<div id="console">', File.binread(bin/"agentiik-api")
+    end
 
     %w[agentiik-api agentiik-controller agk-runner].each do |program|
       next unless (bin/program).exist?
