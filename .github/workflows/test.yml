@@ -41,7 +41,8 @@ jobs:
   # release CHANGELOG.md names last, and the formulae build those once they name its tag, which is set once the
   # engine's tag exists. Until then the server jobs build the engine's main with --HEAD, which that tag will be cut
   # from, so that the scripts are tested before the tag rather than after it, as deploy's single-host workflow runs the
-  # dev images of main until its release is published. The upgrade starts from the newest release tag of this
+  # dev images of main until its release is published. A CHANGELOG.md opening on Unreleased is the next release being
+  # written, whose tag nothing names yet, so it builds main too. The upgrade starts from the newest release tag of this
   # repository before that release.
   choose:
     runs-on: ubuntu-latest
@@ -59,14 +60,18 @@ jobs:
           release="$(sed -n 's/^## \(v[0-9][0-9.]*\), .*/\1/p' CHANGELOG.md | head -n 1)"
           test -n "$release"
           head=""
+          if [ "$(grep -m 1 '^## ' CHANGELOG.md)" = "## Unreleased" ]; then
+            echo "CHANGELOG.md opens on Unreleased: the next release is being written"
+            head="--HEAD" release=""
+          fi
           for formula in agk agentiik; do
             tag="$(sed -n 's/^ *tag: *"\(v[^"]*\)",$/\1/p' "Formula/$formula.rb")"
             test -n "$tag"
             echo "$formula builds $tag"
-            if [ "$tag" != "$release" ]; then head="--HEAD"; fi
+            if [ -n "$release" ] && [ "$tag" != "$release" ]; then head="--HEAD"; fi
           done
           if [ -n "$head" ]; then
-            echo "$release is not what the formulae build yet: the server jobs build the engine's main with --HEAD"
+            echo "${release:-The next release} is not what the formulae build yet: the server jobs build the engine's main with --HEAD"
           else
             echo "The formulae build $release, as tagged"
           fi
@@ -146,6 +151,47 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' --cacert "$ca" "$AGENTIIK_SERVER/api/v1/runner-pools")" = 401
           brew services info --json agentiik/tap/agentiik | tee info.json
           grep -Eq '"running": *true' info.json
+
+      # The web console at the root of the server's address, where the programs carry one, from v0.6.0: its page, which
+      # an address of its own below the root is answered too, and the files the page names beside it. Then, with
+      # AGK_CONSOLE=off in api.env, none of it, while the sign-in page still answers; and the console again once the
+      # line is taken out, as the rest of the job expects the server.
+      - name: the console, and its absence when switched off
+        run: |
+          if ! grep -aq '<div id="console">' "$(brew --prefix)/bin/agentiik-api"; then
+            echo "agentiik-api carries no console before v0.6.0, so there is none to check"
+            exit 0
+          fi
+          ca="$(brew --prefix)/etc/agentiik/tls/ca.pem"
+          get() { curl -sS --cacert "$ca" -o page.html -w '%{http_code}' "$AGENTIIK_SERVER$1" || true; }
+          test "$(get /)" = 200
+          grep -q '<div id="console">' page.html
+          grep -q '<base href="/">' page.html
+          cp page.html console.html
+          files="$(grep -oE '(src|href)="\./[^"]+"' console.html | sed -E 's/^(src|href)="\.\/(.*)"$/\2/')"
+          echo "$files"
+          grep -q '\.js$' <<<"$files"
+          for file in $files; do curl -fsS --cacert "$ca" -o /dev/null "$AGENTIIK_SERVER/$file"; done
+          test "$(get /demo/runs)" = 200
+          cmp page.html console.html
+          env="$(brew --prefix)/etc/agentiik/api.env"
+          cp "$env" api.env.kept
+          echo 'AGK_CONSOLE="off"' >> "$env"
+          brew services restart agentiik/tap/agentiik
+          for i in $(seq 1 60); do
+            if [ "$(get /)" = 404 ]; then break; fi
+            if [ "$i" = 60 ]; then echo "the console was still served with AGK_CONSOLE=off"; exit 1; fi
+            sleep 2
+          done
+          test "$(get /demo/runs)" = 404
+          test "$(get /auth/enrol)" = 200
+          cp api.env.kept "$env"
+          brew services restart agentiik/tap/agentiik
+          for i in $(seq 1 60); do
+            if [ "$(get /)" = 200 ]; then break; fi
+            if [ "$i" = 60 ]; then echo "the console was not served again once AGK_CONSOLE=off was taken out"; exit 1; fi
+            sleep 2
+          done
 
       - name: agk push, through the keychain's trust
         run: |
