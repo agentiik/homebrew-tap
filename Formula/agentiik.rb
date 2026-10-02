@@ -17,7 +17,7 @@
 # serves the web console from its own binary, which embeds the console's build, so the console is built
 # first, with Node, which is needed for the build alone, as Go is.
 class Agentiik < Formula
-  desc "Server programs: API, controller and, on Linux, runner, with the agk command-line tool"
+  desc "Server programs: API, controller, Linux runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
   url "https://github.com/agentiik/agentiik.git",
       tag:      "v0.5.0",
