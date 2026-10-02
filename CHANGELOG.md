@@ -2,12 +2,14 @@
 
 The releases of `homebrew-tap`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.6.0, 2026-10-02
 
+- `agk` and `agentiik` build from `v0.6.0`.
 - `agentiik` builds the web console, with Node as a build dependency, before `agentiik-api`, which serves it from its own binary at `https://localhost:8443`, where the source holds one, from v0.6.0. It is named with the version the programs record, as the engine's release names the console of its images, and `brew test` checks that `agentiik-api` carries it.
 - `agentiik` installs `agk-runner` on Linux alone. A runner is a Linux host, and on a Mac the program could only refuse to join, as it now says it does.
 - `etc/agentiik/api.env` names `AGK_CONSOLE`, commented out: `off` serves the API alone, the sign-in page included.
 - CI checks a server's console at the root of its address, an address of its own below it and the files its page names, then its absence with `AGK_CONSOLE=off` in `api.env` while the sign-in page still answers, where `agentiik-api` carries one. A `CHANGELOG.md` opening on Unreleased builds the engine's `main` with `--HEAD` in the server jobs, as one naming a release the formulae do not build yet does, so that what the next release changes is tested before its tag.
+- `CLAUDE.md` is the copy of `agentiik/.github`'s as it stands at v0.6.0: twelve repositories, the web console part of `agentiik`, and the roadmap at 685 tasks in sixty-three groups.
 
 ## v0.5.0, 2026-09-30
 
