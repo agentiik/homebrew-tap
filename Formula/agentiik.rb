@@ -1,4 +1,7 @@
-# The server programs of Agentiik beside the command line: the API, the controller and the runner.
+# The server programs of Agentiik beside the command line: the API, the controller and, on Linux, the runner.
+#
+# A runner is a Linux host, since it measures the host from /proc, which macOS does not have, so
+# agk-runner is built on Linux alone: on a Mac it could only refuse to join.
 #
 # The API and the controller are the control plane, and a host running them needs PostgreSQL and
 # a NATS server with JetStream. The service runs a server on this Mac alone: nats-server, the API
@@ -14,7 +17,7 @@
 # serves the web console from its own binary, which embeds the console's build, so the console is built
 # first, with Node, which is needed for the build alone, as Go is.
 class Agentiik < Formula
-  desc "Server programs: API, controller and runner, with the agk command-line tool"
+  desc "Server programs: API, controller and, on Linux, runner, with the agk command-line tool"
   homepage "https://agentiik.github.io/docs"
   url "https://github.com/agentiik/agentiik.git",
       tag:      "v0.5.0",
@@ -28,7 +31,9 @@ class Agentiik < Formula
   depends_on "nats-server"
 
   def install
-    programs = %w[agentiik-api agentiik-controller agk-runner].select { |p| (buildpath/"cmd"/p).directory? }
+    programs = %w[agentiik-api agentiik-controller]
+    programs << "agk-runner" if OS.linux?
+    programs.select! { |p| (buildpath/"cmd"/p).directory? }
     odie "this source holds none of the server programs" if programs.empty?
 
     # The console, where the source holds one, from v0.6.0: built into console/dist before agentiik-api,
@@ -79,7 +84,8 @@ class Agentiik < Formula
       Settings: #{etc}/agentiik (https://agentiik.github.io/docs/#configuration)
       Logs:     #{var}/log/agentiik
 
-      A runner is a Linux host: https://agentiik.github.io/docs/#installing-a-runner
+      A runner is a Linux host, so agk-runner is installed on Linux alone:
+      https://agentiik.github.io/docs/#installing-a-runner
     EOS
   end
 
