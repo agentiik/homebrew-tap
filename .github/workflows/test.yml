@@ -374,6 +374,8 @@ jobs:
         run: |
           want="$(brew info --json=v2 agentiik/tap/agk | python3 -c 'import sys,json; print(json.load(sys.stdin)["formulae"][0]["versions"]["stable"])')"
           agk --version | tee /dev/stderr | grep -q "v$want"
-          for p in agentiik-api agentiik-controller agk-runner; do
+          # A runner is a Linux host, and the formula installs agk-runner on Linux alone.
+          test ! -e "$(brew --prefix)/bin/agk-runner"
+          for p in agentiik-api agentiik-controller; do
             "$(brew --prefix)/bin/$p" --version 2>&1 | head -1 | tee /dev/stderr | grep -q "$want" || "$(brew --prefix)/bin/$p" version 2>&1 | head -1 | grep -q "$want"
           done

@@ -11,7 +11,7 @@ brew install agentiik/tap/agentiik         # the server programs, with the comma
 | Formula | Installs | Built from |
 | --- | --- | --- |
 | `agk` | `agk`, with the static helper a script step mounts at `/agk/bin/agk` embedded for linux/amd64 and linux/arm64 | the tagged source of `agentiik/agentiik` |
-| `agentiik` | `agentiik-api`, `agentiik-controller` and `agk-runner`, and `agk` through a dependency | the tagged source of `agentiik/agentiik` |
+| `agentiik` | `agentiik-api`, `agentiik-controller` and, on Linux, `agk-runner`, and `agk` through a dependency | the tagged source of `agentiik/agentiik` |
 
 Both build from source with Go, so what runs is what the tag names. `agentiik` also installs `agentiik-setup`, `agentiik-server` and the service below, and pulls in `nats-server`, which that service runs; PostgreSQL is left to you.
 
