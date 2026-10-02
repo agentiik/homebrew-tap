@@ -2,8 +2,9 @@
 
 The releases of `homebrew-tap`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.6.0, 2026-10-02
 
+- `agk` and `agentiik` build from `v0.6.0`.
 - `agentiik` builds the web console, with Node as a build dependency, before `agentiik-api`, which serves it from its own binary at `https://localhost:8443`, where the source holds one, from v0.6.0. It is named with the version the programs record, as the engine's release names the console of its images, and `brew test` checks that `agentiik-api` carries it.
 - `agentiik` installs `agk-runner` on Linux alone. A runner is a Linux host, and on a Mac the program could only refuse to join, as it now says it does.
 - `etc/agentiik/api.env` names `AGK_CONSOLE`, commented out: `off` serves the API alone, the sign-in page included.
