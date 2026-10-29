@@ -2,7 +2,7 @@
 
 The releases of `homebrew-tap`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.7.0, 2026-10-30
 
 - `CLAUDE.md` is the copy of `agentiik/.github`'s, which no longer counts the roadmap's tasks, groups or Feature issues: the roadmap counts them in each milestone's tally, and the 685 tasks the copy named were already 696 at the v0.6.0 documentation.
 
